@@ -66,7 +66,7 @@ class RAGOrchestrator:
             print(error_msg)
             return None if response_key == "embedding" else error_msg
 
-    def process_query(self, question: str) -> Tuple[str, str, object]:
+    def process_query(self, question: str) -> Tuple[str, str, None]:
         """Полный цикл обработки вопроса от пользователя."""
         if not question:
             return "Пожалуйста, введите вопрос.", "", None
@@ -74,7 +74,7 @@ class RAGOrchestrator:
         self._log_step(1, f"Получение эмбеддинга для вопроса: '{question[:30]}...'")
         question_embedding = self.get_embedding(question)
         if not question_embedding:
-            return "Не удалось получить вектор для вопроса. Проверьте сервис эмбеддингов.", ""
+            return "Не удалось получить вектор для вопроса. Проверьте сервис эмбеддингов.", "", None
         self._log_completion("эмбеддинг получен")
 
         self._log_step(2, "Поиск релевантного контекста в Qdrant...")
@@ -170,27 +170,6 @@ if __name__ == "__main__":
                 fn=orchestrator.process_query,
                 inputs=question_box,
                 outputs=[answer_box, sources_box, file_preview]
-            )
-
-            # Добавляем JavaScript для обработки кликов по скрепкам
-            answer_box.change(
-                None,
-                None,
-                None,
-                js="""
-                function() {
-                    setTimeout(() => {
-                        document.querySelectorAll('#answer_display a[href^="file="]').forEach(link => {
-                            link.onclick = function(e) {
-                                e.preventDefault();
-                                const fileName = this.href.split('file=')[1];
-                                console.log('Клик по файлу:', fileName);
-                                // Здесь можно добавить логику для загрузки файла
-                            };
-                        });
-                    }, 100);
-                }
-                """
             )
 
         # Запускаем Gradio на порту 80, чтобы был доступен по IP машины
