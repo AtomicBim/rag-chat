@@ -12,18 +12,15 @@ def get_file_preview(evt: gr.SelectData):
     с сервиса rag-client.
     """
     try:
-        soup = BeautifulSoup(evt.value, "html.parser")
-        link = soup.find('a')
-        if link and link.has_attr('href'):
-            file_ref = link['href'].split('=')[-1]
-            
-            # Кодируем имя файла для безопасной передачи в URL
-            encoded_file_ref = quote(file_ref)
-            
-            # Формируем полный URL для доступа к файлу
-            file_url = f"{config.DOCS_ENDPOINT.strip('/')}/{encoded_file_ref}"
-            print(f"Запрос превью для URL: {file_url}")
-            return file_url
+        file_ref = evt.value
+        
+        # Кодируем имя файла для безопасной передачи в URL
+        encoded_file_ref = quote(file_ref)
+        
+        # Формируем полный URL для доступа к файлу
+        file_url = f"{config.DOCS_ENDPOINT.strip('/')}/{encoded_file_ref}"
+        print(f"Запрос превью для URL: {file_url}")
+        return file_url
     except Exception as e:
         print(f"Ошибка при обработке клика для превью: {e}")
     
@@ -105,16 +102,16 @@ class RAGOrchestrator:
              paragraphs = soup.get_text().split('\n')
 
         for i, p in enumerate(paragraphs):
-            source_file = sources[i % len(sources)] # Циклически берем источники
-            clip_html = f'<a href="file={source_file}" class="paperclip" title="Показать {source_file}">📎</a>'
+            source_file = sources[i % len(sources)]
+            # ИЗМЕНЕНИЕ: Упрощаем href, теперь он содержит только имя файла.
+            clip_html = f'<a href="{source_file}" class="paperclip" title="Показать {source_file}">📎</a>'
             if isinstance(p, str):
-                 paragraphs[i] = f"<p>{p} {clip_html}</p>"
+                paragraphs[i] = f"<p>{p} {clip_html}</p>"
             else:
-                 p.append(BeautifulSoup(clip_html, "html.parser"))
-
+                p.append(BeautifulSoup(clip_html, "html.parser"))
 
         return "".join(map(str, paragraphs))
-    
+
     def _search_and_prepare_context(self, question_embedding: list[float]) -> Tuple[str, list[str]]:
         """Поиск контекста в Qdrant и подготовка источников."""
         search_results = self.qdrant_client.search(
@@ -170,6 +167,15 @@ if __name__ == "__main__":
                 fn=orchestrator.process_query,
                 inputs=question_box,
                 outputs=[answer_box, sources_box, file_preview]
+            )
+
+            # >>> ДОБАВИТЬ ЭТОТ БЛОК <<<
+            # Связываем событие select (клик по ссылке <a>) в HTML-блоке
+            # с нашей функцией get_file_preview.
+            answer_box.select(
+                fn=get_file_preview,
+                inputs=None, # Входные данные не нужны, они придут в объекте события
+                outputs=file_preview
             )
 
         # Запускаем Gradio на порту 80, чтобы был доступен по IP машины
