@@ -1,3 +1,4 @@
 qdrant-client==1.9.0
 requests==2.32.3
 gradio==4.44.1
+beautifulsoup4==4.12.3 # Для парсинга HTML и отображения превью

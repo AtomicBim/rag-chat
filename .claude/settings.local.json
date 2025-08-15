@@ -6,7 +6,8 @@
       "Bash(gh repo edit:*)",
       "Bash(python:*)",
       "Bash(git add:*)",
-      "Bash(docker build:*)"
+      "Bash(docker build:*)",
+      "Bash(pip install:*)"
     ],
     "deny": [],
     "ask": [],
