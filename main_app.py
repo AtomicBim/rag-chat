@@ -99,19 +99,24 @@ class RAGOrchestrator:
     def _log_completion(self, message: str) -> None:
         print(f"   ...{message}.")
 
-    def process_query_for_gradio(self, question: str) -> Tuple[List[List[str]], List[List[str]], List[Dict], str, None]:
+    # В файле main_app.py, внутри класса RAGOrchestrator
+
+    def process_query_for_gradio(self, question: str) -> Tuple[gr.Dataset, gr.Dataset, List[Dict], str, None]:
         """
-        Полный цикл обработки вопроса от пользователя с подробным логированием для отладки.
+        Полный цикл обработки вопроса от пользователя.
+        Возвращает обновленные компоненты Gradio.
         """
         if not question:
-            return [], [[""]], [], "*Введите вопрос...*", None
+            # Возвращаем пустые компоненты Dataset
+            return gr.Dataset(samples=[]), gr.Dataset(samples=[[""]]), [], "*Введите вопрос...*", None
 
         # Шаг 1: Эмбеддинг
         self._log_step(1, f"Получение эмбеддинга для вопроса: '{question[:30]}...'")
         question_embedding = self.get_embedding(question)
         if not question_embedding:
             self._log_completion("ОШИБКА")
-            return [["Ошибка: не удалось получить вектор для вопроса."]], [[""]], [], "*Ошибка*", None
+            error_data = [["Ошибка: не удалось получить вектор для вопроса."]]
+            return gr.Dataset(samples=error_data), gr.Dataset(samples=[[""]]), [], "*Ошибка*", None
         self._log_completion("эмбеддинг получен")
 
         # Шаг 2: Поиск в Qdrant
@@ -120,40 +125,38 @@ class RAGOrchestrator:
         sources_data = [[source] for source in sources]
         if not context_chunks:
             self._log_completion("контекст не найден")
-            return [["В базе знаний не найдено релевантного контекста."]], sources_data, [], "*Контекст не найден*", None
+            error_data = [["В базе знаний не найдено релевантного контекста."]]
+            return gr.Dataset(samples=error_data), gr.Dataset(samples=sources_data), [], "*Контекст не найден*", None
 
         # Шаг 3: Запрос к LLM
         self._log_step(3, "Отправка запроса на LLM-сервис...")
         structured_answer = self.query_llm(question, context_chunks)
         
-        # --- НОВЫЕ ОТЛАДОЧНЫЕ СООБЩЕНИЯ ---
-        print("\n--- ОТЛАДКА ---")
-        print(f"DEBUG: Получен ответ от query_llm: {structured_answer}")
-        print(f"DEBUG: Тип ответа: {type(structured_answer)}")
-        print("--- КОНЕЦ ОТЛАДКИ ---\n")
-        # --- КОНЕЦ ОТЛАДОЧНЫХ СООБЩЕНИЙ ---
-
         if not structured_answer:
             self._log_completion("ОШИБКА: structured_answer пустой или None")
-            return [["Ошибка: LLM не смог сгенерировать ответ."]], sources_data, [], "*Ошибка*", None
+            error_data = [["Ошибка: LLM не смог сгенерировать ответ."]]
+            return gr.Dataset(samples=error_data), gr.Dataset(samples=sources_data), [], "*Ошибка*", None
         
         self._log_completion("ответ от LLM получен")
 
         # Шаг 4: Форматирование данных для Gradio
         try:
-            print("DEBUG: Начинаю форматирование ответа для Gradio...")
             answer_data = [[item['paragraph']] for item in structured_answer]
-            print(f"DEBUG: Сформатированные данные для answer_box: {answer_data}")
             
-            sources_data = [[source] for source in sources]
-            
-            return answer_data, sources_data, structured_answer, "*Выберите абзац из ответа...*", None
+            # --- ГЛАВНОЕ ИЗМЕНЕНИЕ ЗДЕСЬ ---
+            # Оборачиваем наши списки в объекты gr.Dataset
+            return (
+                gr.Dataset(samples=answer_data), 
+                gr.Dataset(samples=sources_data), 
+                structured_answer, 
+                "*Выберите абзац из ответа...*", 
+                None
+            )
             
         except Exception as e:
-            # Этот блок перехватит ошибку, если она произойдет при доступе к structured_answer
-            print(f"\n!!! КРИТИЧЕСКАЯ ОШИБКА в process_query_for_gradio при форматировании: {e} !!!\n")
-            error_list_of_lists = [[f"Внутренняя ошибка в интерфейсе: {e}"]]
-            return error_list_of_lists, sources_data, [], f"Ошибка: {e}", None
+            print(f"\n!!! КРИТИЧЕСКАЯ ОШИБКА при форматировании: {e} !!!\n")
+            error_data = [[f"Внутренняя ошибка в интерфейсе: {e}"]]
+            return gr.Dataset(samples=error_data), gr.Dataset(samples=sources_data), [], f"Ошибка: {e}", None
 
 # --- Инициализация и запуск Gradio ---
 if __name__ == "__main__":
