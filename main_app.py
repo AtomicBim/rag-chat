@@ -2,7 +2,7 @@ import requests
 import gradio as gr
 import config
 from qdrant_client import QdrantClient
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Any
 from urllib.parse import quote
 
 def get_file_preview(evt: gr.SelectData):
@@ -10,23 +10,34 @@ def get_file_preview(evt: gr.SelectData):
     Обработчик выбора источника из списка. Формирует iframe для отображения файла.
     """
     try:
-        # У компонента Dataset evt.value - это список значений из выбранной строки.
-        # Так как у нас одна колонка, берем первый элемент.
         file_ref = evt.value[0]
-        
-        # Кодируем имя файла для безопасной передачи в URL
         encoded_file_ref = quote(file_ref)
-        
-        # Формируем полный URL для доступа к файлу
         file_url = f"{config.DOCS_ENDPOINT.strip('/')}/{encoded_file_ref}"
         print(f"Запрос превью для URL: {file_url}")
-        
-        # Возвращаем HTML с iframe для отображения документа
         iframe_html = f'<iframe src="{file_url}" width="100%" height="600px" style="border: 1px solid #ccc;"></iframe>'
         return iframe_html
     except Exception as e:
         print(f"Ошибка при обработке выбора для превью: {e}")
         return f"<p>Ошибка загрузки файла: {e}</p>"
+
+def show_source_details_from_state(state_data: list, evt: gr.SelectData):
+    """
+    Обработчик выбора строки в датасете с ответом.
+    Отображает исходный текст и имя файла из сохраненного состояния.
+    """
+    if not state_data or evt.index is None:
+        return "*Источник не найден...*"
+    
+    row_index = evt.index[0]
+    if row_index >= len(state_data):
+        return "*Ошибка индекса. Попробуйте обновить запрос.*"
+
+    selected_item = state_data[row_index]
+    source_file = selected_item.get('source', {}).get('file', 'N/A')
+    source_text = selected_item.get('source', {}).get('text', 'N/A')
+
+    markdown_output = f"**Источник:** `{source_file}`\n\n---\n\n{source_text}"
+    return markdown_output
 
 class RAGOrchestrator:
     def __init__(self, qdrant_client: QdrantClient):
@@ -42,7 +53,7 @@ class RAGOrchestrator:
             60
         )
 
-    def query_llm(self, question: str, context: str) -> str:
+    def query_llm(self, question: str, context: List[dict]) -> List[dict]:
         result = self._make_api_request(
             config.OPENAI_API_ENDPOINT,
             {"question": question, "context": context},
@@ -50,7 +61,7 @@ class RAGOrchestrator:
             "LLM-сервису",
             120
         )
-        return result or "Сервер вернул пустой ответ."
+        return result if isinstance(result, list) else []
     
     def _make_api_request(self, endpoint: str, payload: dict, response_key: str, service_name: str, timeout: int):
         try:
@@ -60,35 +71,9 @@ class RAGOrchestrator:
         except requests.exceptions.RequestException as e:
             error_msg = f"Ошибка при обращении к {service_name}: {e}"
             print(error_msg)
-            return None if response_key == "embedding" else error_msg
+            return None if response_key == "embedding" else []
 
-    def process_query(self, question: str) -> Tuple[str, list, None]:
-        """Полный цикл обработки вопроса от пользователя."""
-        if not question:
-            return "Пожалуйста, введите вопрос.", [[""]], None
-
-        self._log_step(1, f"Получение эмбеддинга для вопроса: '{question[:30]}...'")
-        question_embedding = self.get_embedding(question)
-        if not question_embedding:
-            return "Не удалось получить вектор для вопроса. Проверьте сервис эмбеддингов.", [[""]], None
-        self._log_completion("эмбеддинг получен")
-
-        self._log_step(2, "Поиск релевантного контекста в Qdrant...")
-        context, sources = self._search_and_prepare_context(question_embedding)
-        if not context:
-            return "В базе знаний не найдено релевантного контекста.", [[""]], None
-
-        self._log_step(3, "Отправка запроса на LLM-сервис...")
-        answer = self.query_llm(question, context)
-        self._log_completion("ответ от LLM получен")
-
-        # Преобразуем список источников в формат для gr.Dataset (список списков)
-        sources_data = [[source] for source in sources]
-        return answer, sources_data, None
-    
-    # Функция _add_paperclips_to_answer полностью удалена.
-
-    def _search_and_prepare_context(self, question_embedding: list[float]) -> Tuple[str, list[str]]:
+    def _search_and_prepare_context(self, question_embedding: list[float]) -> Tuple[List[Dict[str, str]], list[str]]:
         search_results = self.qdrant_client.search(
             collection_name=config.COLLECTION_NAME,
             query_vector=question_embedding,
@@ -97,12 +82,16 @@ class RAGOrchestrator:
         )
         
         if not search_results:
-            return "", []
+            return [], []
         
-        context = "\n---\n".join([result.payload['text'] for result in search_results])
+        context_chunks = [
+            {"text": result.payload['text'], "file": result.payload['source_file']}
+            for result in search_results
+        ]
         sources = sorted(list(set([result.payload['source_file'] for result in search_results])))
-        self._log_completion(f"найдено {len(sources)} источников")
-        return context, sources
+        
+        self._log_completion(f"найдено {len(context_chunks)} фрагментов из {len(sources)} источников")
+        return context_chunks, sources
     
     def _log_step(self, step_num: int, message: str) -> None:
         print(f"\n{step_num}. {message}")
@@ -110,51 +99,94 @@ class RAGOrchestrator:
     def _log_completion(self, message: str) -> None:
         print(f"   ...{message}.")
 
+    def process_query_for_gradio(self, question: str) -> Tuple[List[List[str]], List[List[str]], List[Dict], str, None]:
+        if not question:
+            return [], [[""]], [], "*Введите вопрос...*", None
+
+        self._log_step(1, f"Получение эмбеддинга для вопроса: '{question[:30]}...'")
+        question_embedding = self.get_embedding(question)
+        if not question_embedding:
+            self._log_completion("ОШИБКА")
+            return [["Ошибка: не удалось получить вектор для вопроса."]], [[""]], [], "*Ошибка*", None
+        self._log_completion("эмбеддинг получен")
+
+        self._log_step(2, "Поиск релевантного контекста в Qdrant...")
+        context_chunks, sources = self._search_and_prepare_context(question_embedding)
+        sources_data = [[source] for source in sources]
+        if not context_chunks:
+            self._log_completion("контекст не найден")
+            return [["В базе знаний не найдено релевантного контекста."]], sources_data, [], "*Контекст не найден*", None
+
+        self._log_step(3, "Отправка запроса на LLM-сервис...")
+        structured_answer = self.query_llm(question, context_chunks)
+        if not structured_answer:
+            self._log_completion("ОШИБКА")
+            return [["Ошибка: LLM не смог сгенерировать ответ."]], sources_data, [], "*Ошибка*", None
+        self._log_completion("ответ от LLM получен")
+
+        answer_data = [[item['paragraph']] for item in structured_answer]
+        
+        return answer_data, sources_data, structured_answer, "*Выберите абзац из ответа...*", None
+
 # --- Инициализация и запуск Gradio ---
 if __name__ == "__main__":
     try:
         print("Подключение к Qdrant...")
         q_client = QdrantClient(host=config.QDRANT_HOST, port=config.QDRANT_PORT)
-
         orchestrator = RAGOrchestrator(qdrant_client=q_client)
 
         print("\nЗапуск интерфейса Gradio...")
-        with gr.Blocks() as iface:
+        with gr.Blocks(theme=gr.themes.Soft()) as iface:
+            # Невидимый компонент для хранения полного ответа от LLM
+            full_response_state = gr.State([])
+            
             gr.Markdown(
                 """
-                # RAG-система для ВНД Атомстройкомплекс
-                Введите свой вопрос. Система найдет релевантные документы и сгенерирует ответ.
-                Кликните на имя файла в списке источников для просмотра.
+                # Корпоративная RAG-система
+                - **Ответ**: Нажмите на любой абзац ответа, чтобы увидеть исходный текст и имя файла в поле "Детали источника".
+                - **Найденные источники**: Нажмите на имя файла для предпросмотра всего документа.
                 """
             )
             with gr.Row():
                 with gr.Column(scale=2):
-                    question_box = gr.Textbox(lines=3, label="Ваш вопрос к базе знаний")
-                    submit_btn = gr.Button("Отправить")
+                    question_box = gr.Textbox(lines=4, label="Ваш вопрос", placeholder="Например: Каков порядок согласования командировки?")
+                    submit_btn = gr.Button("Отправить", variant="primary")
                     
-                    # ИЗМЕНЕНИЕ: Заменяем Textbox на Dataset для источников
+                    gr.Markdown("### Детали источника")
+                    source_details_box = gr.Markdown(value="*Выберите абзац из ответа выше...*")
+                    
+                    gr.Markdown("### Найденные источники (файлы)")
                     sources_box = gr.Dataset(
                         components=["text"],
-                        label="Найденные источники",
+                        label="Источники",
                         headers=["Имя файла"],
-                        samples=[["Здесь появятся источники..."]] # Пример для отображения
+                        samples=[["..."]]
                     )
-
-                with gr.Column(scale=3):
-                    # ИЗМЕНЕНИЕ: Используем Markdown для ответа, он проще и чище
-                    answer_box = gr.Markdown(label="Ответ")
                     file_preview = gr.HTML(label="Превью документа")
 
+                with gr.Column(scale=3):
+                    gr.Markdown("### Ответ системы")
+                    answer_box = gr.Dataset(
+                        headers=["Абзац ответа"],
+                        label="Сгенерированный ответ",
+                        samples=[["..."]]
+                    )
+
             submit_btn.click(
-                fn=orchestrator.process_query,
+                fn=orchestrator.process_query_for_gradio,
                 inputs=question_box,
-                outputs=[answer_box, sources_box, file_preview] # Направляем вывод в правильные компоненты
+                outputs=[answer_box, sources_box, full_response_state, source_details_box, file_preview]
             )
-            
-            # ИЗМЕНЕНИЕ: Вешаем обработчик .select() на компонент Dataset
+
+            answer_box.select(
+                fn=show_source_details_from_state,
+                inputs=[full_response_state],
+                outputs=[source_details_box]
+            )
+
             sources_box.select(
                 fn=get_file_preview,
-                inputs=None, # Данные берутся из объекта события (evt)
+                inputs=None,
                 outputs=file_preview
             )
 
