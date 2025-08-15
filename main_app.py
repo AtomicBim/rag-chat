@@ -100,9 +100,13 @@ class RAGOrchestrator:
         print(f"   ...{message}.")
 
     def process_query_for_gradio(self, question: str) -> Tuple[List[List[str]], List[List[str]], List[Dict], str, None]:
+        """
+        Полный цикл обработки вопроса от пользователя с подробным логированием для отладки.
+        """
         if not question:
             return [], [[""]], [], "*Введите вопрос...*", None
 
+        # Шаг 1: Эмбеддинг
         self._log_step(1, f"Получение эмбеддинга для вопроса: '{question[:30]}...'")
         question_embedding = self.get_embedding(question)
         if not question_embedding:
@@ -110,6 +114,7 @@ class RAGOrchestrator:
             return [["Ошибка: не удалось получить вектор для вопроса."]], [[""]], [], "*Ошибка*", None
         self._log_completion("эмбеддинг получен")
 
+        # Шаг 2: Поиск в Qdrant
         self._log_step(2, "Поиск релевантного контекста в Qdrant...")
         context_chunks, sources = self._search_and_prepare_context(question_embedding)
         sources_data = [[source] for source in sources]
@@ -117,16 +122,38 @@ class RAGOrchestrator:
             self._log_completion("контекст не найден")
             return [["В базе знаний не найдено релевантного контекста."]], sources_data, [], "*Контекст не найден*", None
 
+        # Шаг 3: Запрос к LLM
         self._log_step(3, "Отправка запроса на LLM-сервис...")
         structured_answer = self.query_llm(question, context_chunks)
+        
+        # --- НОВЫЕ ОТЛАДОЧНЫЕ СООБЩЕНИЯ ---
+        print("\n--- ОТЛАДКА ---")
+        print(f"DEBUG: Получен ответ от query_llm: {structured_answer}")
+        print(f"DEBUG: Тип ответа: {type(structured_answer)}")
+        print("--- КОНЕЦ ОТЛАДКИ ---\n")
+        # --- КОНЕЦ ОТЛАДОЧНЫХ СООБЩЕНИЙ ---
+
         if not structured_answer:
-            self._log_completion("ОШИБКА")
+            self._log_completion("ОШИБКА: structured_answer пустой или None")
             return [["Ошибка: LLM не смог сгенерировать ответ."]], sources_data, [], "*Ошибка*", None
+        
         self._log_completion("ответ от LLM получен")
 
-        answer_data = [[item['paragraph']] for item in structured_answer]
-        
-        return answer_data, sources_data, structured_answer, "*Выберите абзац из ответа...*", None
+        # Шаг 4: Форматирование данных для Gradio
+        try:
+            print("DEBUG: Начинаю форматирование ответа для Gradio...")
+            answer_data = [[item['paragraph']] for item in structured_answer]
+            print(f"DEBUG: Сформатированные данные для answer_box: {answer_data}")
+            
+            sources_data = [[source] for source in sources]
+            
+            return answer_data, sources_data, structured_answer, "*Выберите абзац из ответа...*", None
+            
+        except Exception as e:
+            # Этот блок перехватит ошибку, если она произойдет при доступе к structured_answer
+            print(f"\n!!! КРИТИЧЕСКАЯ ОШИБКА в process_query_for_gradio при форматировании: {e} !!!\n")
+            error_list_of_lists = [[f"Внутренняя ошибка в интерфейсе: {e}"]]
+            return error_list_of_lists, sources_data, [], f"Ошибка: {e}", None
 
 # --- Инициализация и запуск Gradio ---
 if __name__ == "__main__":
