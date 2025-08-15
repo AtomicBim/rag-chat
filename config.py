@@ -6,4 +6,4 @@ SEARCH_LIMIT = 30  # Лимит документов для проверки о�
 EMBEDDING_SERVICE_ENDPOINT = "http://192.168.45.55:8001/create_embedding" 
 OPENAI_API_ENDPOINT = "http://192.168.45.55:8000/generate_answer" 
 
-DOCS_ENDPOINT = "http://192.168.56.1:8001/documents/"
+DOCS_ENDPOINT = "http://192.168.45.55:8001/documents/"
