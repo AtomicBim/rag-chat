@@ -3,5 +3,5 @@ QDRANT_PORT = 6333
 COLLECTION_NAME = "internal_regulations_v2"
 SEARCH_LIMIT = 30  # Лимит документов для проверки ответа
 
-EMBEDDING_SERVICE_ENDPOINT = "http://192.168.56.1:8001/create_embedding" 
-OPENAI_API_ENDPOINT = "http://192.168.45.79:8000/generate_answer" 
+EMBEDDING_SERVICE_ENDPOINT = "http://192.168.45.64:8001/create_embedding" 
+OPENAI_API_ENDPOINT = "http://192.168.45.64:8000/generate_answer" 
